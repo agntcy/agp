@@ -44,6 +44,16 @@ tasks:
     cmds:
       - cargo run --release --bin publisher -- -w sub${SUB}_pub${PUB}_i${SUB_AGENTS}_s${SUB_AGENTS}.dat -c $CONFIG_CLIENT -i 0
 
+  run:mcp:client:
+    desc: "Run mcp client"
+    cmds:
+      - cargo run --release --bin mcp_client
+
+  run:mcp:server:
+    desc: "Run mcp server"
+    cmds:
+      - cargo run --release --bin mcp_server
+
   run:shutdown:
     desc: "Shutdown test"
     cmds:

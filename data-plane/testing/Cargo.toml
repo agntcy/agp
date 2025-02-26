@@ -16,10 +16,19 @@ path = "src/bin/subscriber.rs"
 name = "publisher"
 path = "src/bin/publisher.rs"
 
+[[bin]]
+name = "mpc_client"
+path = "src/bin/mpc_client.rs"
+
+[[bin]]
+name = "mpc_server"
+path = "src/bin/mpc_server.rs"
+
 [dependencies]
 agp-config = { path = "../gateway/config", version = "0.1.1" }
 agp-datapath = { path = "../gateway/datapath", version = "0.1.0" }
 agp-gw = { path = "../gateway/gateway", version = "0.3.2" }
+mcp-client = { path = "../mcp-rust-sdk/crates/mcp-client/" }
 clap = { version = "4.5", features = ["derive"] }
 indicatif = "0.17.11"
 parking_lot = "0.12"

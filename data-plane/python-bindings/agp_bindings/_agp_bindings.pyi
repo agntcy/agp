@@ -43,6 +43,10 @@ class PyService:
         ...
 
 
+class PySessionInfo:
+    id: builtins.int
+    def __new__(cls,id:builtins.int): ...
+
 class PySessionType(Enum):
     r"""
     session type
@@ -67,7 +71,7 @@ def disconnect(svc:PyService, conn:builtins.int) -> typing.Any:
 def publish(svc:PyService, session_id:builtins.int, fanout:builtins.int, blob:typing.Sequence[builtins.int], name:typing.Optional[PyAgentClass]=None, id:typing.Optional[builtins.int]=None, agent:typing.Optional[PyAgentSource]=None) -> typing.Any:
     ...
 
-def receive(svc:PyService) -> typing.Any:
+def receive(svc:PyService, session_id:builtins.int) -> typing.Any:
     ...
 
 def remove_route(svc:PyService, conn:builtins.int, name:PyAgentClass, id:typing.Optional[builtins.int]=None) -> typing.Any:
@@ -77,6 +81,9 @@ def serve(svc:PyService) -> typing.Any:
     ...
 
 def set_route(svc:PyService, conn:builtins.int, name:PyAgentClass, id:typing.Optional[builtins.int]=None) -> typing.Any:
+    ...
+
+def stop(svc:PyService) -> typing.Any:
     ...
 
 def subscribe(svc:PyService, conn:builtins.int, name:PyAgentClass, id:typing.Optional[builtins.int]=None) -> typing.Any:

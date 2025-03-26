@@ -25,6 +25,8 @@ dependencies = [
  "agp-datapath",
  "agp-service",
  "agp-tracing",
+ "async-trait",
+ "futures",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-stub-gen",
@@ -141,14 +143,17 @@ version = "0.2.1"
 dependencies = [
  "agp-config",
  "agp-datapath",
+ "async-trait",
  "drain",
  "parking_lot",
  "rand 0.9.0",
  "serde",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic",
+ "tower 0.5.2",
  "tracing",
  "tracing-test",
 ]
@@ -289,9 +294,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.86"
+version = "0.1.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "644dd749086bf3771a2fbc5f256fdb982d53f011c7d5d560304eafeecebce79d"
+checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
 dependencies = [
  "proc-macro2",
  "quote",

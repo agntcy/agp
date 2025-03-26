@@ -1,12 +1,13 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-use std::future::Future;
-use std::pin::Pin;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use thiserror::Error;
 use tonic::Status;
 
+use crate::traits;
 use agp_datapath::pubsub::proto::pubsub::v1::Message;
 
 #[derive(Error, Debug)]
@@ -36,6 +37,9 @@ pub(crate) enum Error {
     SessionNotFound(String),
     #[error("missing session id: {0}")]
     MissingSessionId(String),
+    #[error("error opening session: {0}")]
+    #[allow(dead_code)]
+    SessionOpenError(String),
 }
 
 /// Session ID
@@ -106,6 +110,7 @@ impl std::fmt::Display for SessionType {
     }
 }
 
+#[async_trait]
 pub(crate) trait Session {
     // Session ID
     #[allow(dead_code)]
@@ -119,12 +124,18 @@ pub(crate) trait Session {
     #[allow(dead_code)]
     fn session_type(&self) -> SessionType;
 
+    // open a channel or request-reply session
+    async fn open(
+        &mut self,
+        listener: Arc<dyn traits::Listener>,
+    ) -> Result<(Info, tokio::sync::mpsc::Receiver<(Message, Info)>), Error>;
+
     // publish a message as part of the session
-    fn on_message(
+    async fn on_message(
         &self,
         message: Message,
         direction: MessageDirection,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'static>>;
+    ) -> Result<Option<Message>, Error>;
 }
 
 /// Common session data
@@ -142,8 +153,8 @@ pub(crate) struct Common {
     /// Sender for messages to gw
     tx_gw: tokio::sync::mpsc::Sender<Result<Message, Status>>,
 
-    /// Sender for messages to app
-    tx_app: tokio::sync::mpsc::Sender<(Message, Info)>,
+    /// Optional sender for messages to app
+    tx_app: Option<tokio::sync::mpsc::Sender<(Message, Info)>>,
 }
 
 impl Common {
@@ -151,7 +162,7 @@ impl Common {
         id: Id,
         session_direction: SessionDirection,
         tx_gw: tokio::sync::mpsc::Sender<Result<Message, Status>>,
-        tx_app: tokio::sync::mpsc::Sender<(Message, Info)>,
+        tx_app: Option<tokio::sync::mpsc::Sender<(Message, Info)>>,
     ) -> Common {
         Common {
             id,
@@ -176,7 +187,11 @@ impl Common {
         self.tx_gw.clone()
     }
 
-    pub(crate) fn tx_app(&self) -> tokio::sync::mpsc::Sender<(Message, Info)> {
+    pub(crate) fn tx_app(&self) -> Option<tokio::sync::mpsc::Sender<(Message, Info)>> {
         self.tx_app.clone()
+    }
+
+    pub(crate) fn set_tx_app(&mut self, tx_app: tokio::sync::mpsc::Sender<(Message, Info)>) {
+        self.tx_app = Some(tx_app);
     }
 }

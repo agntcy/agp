@@ -1,12 +1,11 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use agp_datapath::messages::utils::create_agent_from_type;
-use agp_datapath::messages::utils::get_error;
-use agp_datapath::messages::utils::get_payload;
-use agp_datapath::messages::utils::get_source;
+use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3_stub_gen::define_stub_info_gatherer;
@@ -26,10 +25,15 @@ use agp_config::grpc::{
 };
 use agp_config::tls::{client::TlsClientConfig, server::TlsServerConfig};
 use agp_datapath::messages::encoder::{encode_agent, encode_agent_type, Agent, AgentType};
+use agp_datapath::messages::utils::create_agent_from_type;
+use agp_datapath::messages::utils::get_error;
 use agp_datapath::messages::utils::get_incoming_connection;
+use agp_datapath::messages::utils::get_payload;
+use agp_datapath::messages::utils::get_source;
 use agp_datapath::pubsub::proto::pubsub::v1::Message;
 use agp_datapath::pubsub::ProtoAgent;
 use agp_service::session;
+use agp_service::traits::Listener;
 use agp_service::{Service, ServiceError};
 
 static TRACING_GUARD: OnceCell<agp_tracing::OtelGuard> = OnceCell::const_new();
@@ -379,7 +383,7 @@ struct PyService {
 struct PyServiceInternal {
     service: Service,
     agent: Option<Agent>,
-    rx: Option<mpsc::Receiver<(Message, agp_service::session::Info)>>,
+    sessions: HashMap<u32, session::Info>,
 }
 
 #[gen_stub_pymethods]
@@ -392,7 +396,7 @@ impl PyService {
             sdk: Arc::new(RwLock::new(PyServiceInternal {
                 service: Service::new(svc_id),
                 agent: None,
-                rx: None,
+                sessions: HashMap::new(),
             })),
             config: None,
         }
@@ -401,6 +405,32 @@ impl PyService {
     #[pyo3(signature = (config))]
     pub fn configure(&mut self, config: PyGatewayConfig) {
         self.config = Some(config);
+    }
+}
+
+#[async_trait]
+impl Listener for PyService {
+    async fn open_channel(
+        &self,
+        session: session::Info,
+        stream: agp_service::traits::AppInputStream,
+    ) -> Result<(), ServiceError> {
+        // this method is called when a new session is opened
+        println!("open_channel called for session: {}", session.id);
+
+        // save the stream for later use
+        let mut service = self.sdk.write().await;
+        service.sessions.insert(session.id, stream);
+
+        Ok(())
+    }
+
+    async fn request_reply(
+        &self,
+        _session: session::Info,
+        _message: Message,
+    ) -> Result<Message, ServiceError> {
+        Err(ServiceError::Unknown)
     }
 }
 
@@ -422,8 +452,9 @@ async fn create_agent_impl(
     // create local agent
     let agent = encode_agent(&agent_org, &agent_ns, &agent_class, id);
     let mut service = svc.sdk.write().await;
-    let rx = service.service.create_agent(&agent)?;
-    service.rx = Some(rx);
+    service
+        .service
+        .create_agent(&agent, Arc::new(svc.clone()))?;
     service.agent = Some(agent);
 
     Ok(id)
@@ -453,12 +484,20 @@ async fn create_session_impl(
     session_type: PySessionType,
 ) -> Result<u32, ServiceError> {
     // create local agent
-    let service = svc.sdk.write().await;
+    let mut service = svc.sdk.write().await;
 
     let session_type: session::SessionType = session_type.into();
 
     match &service.agent {
-        Some(agent) => service.service.create_session(agent, session_type).await,
+        Some(agent) => {
+            // get info & stream for the session
+            let (info, stream) = service.service.create_session(agent, session_type).await?;
+
+            // save the stream for later use
+            service.sessions.insert(info.id, stream);
+
+            Ok(info.id)
+        }
         None => Err(ServiceError::AgentNotFound("no agent found".to_string())),
     }
 }
@@ -751,20 +790,19 @@ async fn publish_impl(
     let service = svc.sdk.read().await;
 
     match &service.agent {
-        Some(agent) => {
-            service
-                .service
-                .publish_to(
-                    agent,
-                    session_id as session::Id,
-                    &agent_class,
-                    id,
-                    fanout,
-                    blob,
-                    conn_out,
-                )
-                .await
-        }
+        Some(agent) => service
+            .service
+            .publish_to(
+                agent,
+                session_id as session::Id,
+                &agent_class,
+                id,
+                fanout,
+                blob,
+                conn_out,
+            )
+            .await
+            .map(|_| ()),
         None => Err(ServiceError::AgentNotFound(
             "missing from service".to_string(),
         )),
@@ -793,17 +831,29 @@ fn publish(
 
 async fn receive_impl(
     svc: PyService,
+    session_id: u32,
 ) -> Result<(PySessionInfo, PyAgentSource, Vec<u8>), ServiceError> {
     let mut service = svc.sdk.write().await;
 
-    let rx = service.rx.as_mut().ok_or(ServiceError::ReceiveError(
-        "no local agent created".to_string(),
-    ))?;
+    println!("length of sessions: {}", service.sessions.len());
 
-    let (msg, info) = rx
-        .recv()
+    // get all the channels for all the sessions in the service
+    let mut futures_unordered = FuturesUnordered::new();
+    for (_id, rx) in service.sessions.iter_mut() {
+        futures_unordered.push(rx.recv());
+    }
+
+    // wait for any message to arrive
+    let (msg, info) = futures_unordered
+        .next()
         .await
-        .ok_or(ServiceError::ConfigError("no message received".to_string()))
+        .ok_or(ServiceError::ReceiveError(
+            "no message received".to_string(),
+        ))
+        .map_err(|e| ServiceError::ReceiveError(e.to_string()))?
+        .ok_or(ServiceError::ReceiveError(
+            "no message received".to_string(),
+        ))
         .map_err(|e| ServiceError::ReceiveError(e.to_string()))?;
 
     // Check if the message is an error
@@ -869,8 +919,8 @@ async fn receive_impl(
 
 #[gen_stub_pyfunction]
 #[pyfunction]
-#[pyo3(signature = (svc))]
-fn receive(py: Python, svc: PyService) -> PyResult<Bound<PyAny>> {
+#[pyo3(signature = (svc, session_id))]
+fn receive(py: Python, svc: PyService, session_id: u32) -> PyResult<Bound<PyAny>> {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         receive_impl(svc.clone())
             .await

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rand::Rng;
 use tokio::sync::{mpsc::Sender, RwLock};
@@ -9,6 +10,7 @@ use tonic::Status;
 
 use crate::fire_and_forget;
 use crate::session::{Error, Id, Info, MessageDirection, Session, SessionDirection, SessionType};
+use crate::traits;
 use agp_datapath::messages::utils;
 use agp_datapath::pubsub::proto::pubsub::v1::Message;
 use agp_datapath::pubsub::proto::pubsub::v1::SessionHeaderType;
@@ -21,9 +23,11 @@ pub(crate) struct SessionLayer {
     /// ID of the local connection
     conn_id: u64,
 
-    /// Tx channels
+    /// Tx channel to gateway
     tx_gw: Sender<Result<Message, Status>>,
-    tx_app: Sender<(Message, Info)>,
+
+    /// Listener
+    listener: Arc<dyn traits::Listener>,
 }
 
 impl std::fmt::Debug for SessionLayer {
@@ -37,23 +41,18 @@ impl SessionLayer {
     pub(crate) fn new(
         conn_id: u64,
         tx_gw: Sender<Result<Message, Status>>,
-        tx_app: Sender<(Message, Info)>,
+        listener: Arc<dyn traits::Listener>,
     ) -> SessionLayer {
         SessionLayer {
             pool: RwLock::new(HashMap::new()),
             conn_id,
             tx_gw,
-            tx_app,
+            listener,
         }
     }
 
     pub(crate) fn tx_gw(&self) -> Sender<Result<Message, Status>> {
         self.tx_gw.clone()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn tx_app(&self) -> Sender<(Message, Info)> {
-        self.tx_app.clone()
     }
 
     pub(crate) fn conn_id(&self) -> u64 {
@@ -83,7 +82,7 @@ impl SessionLayer {
         &self,
         session_type: SessionType,
         id: Option<Id>,
-    ) -> Result<Id, Error> {
+    ) -> Result<(Info, tokio::sync::mpsc::Receiver<(Message, Info)>), Error> {
         // TODO(msardara): the session identifier should be a combination of the
         // session ID and the agent ID, to prevent collisions.
 
@@ -94,20 +93,28 @@ impl SessionLayer {
         };
 
         // create a new session
-        let session = match session_type {
+        let mut session = match session_type {
             SessionType::FireAndForget => Box::new(fire_and_forget::FireAndForget::new(
                 id,
                 SessionDirection::Bidirectional,
                 self.tx_gw.clone(),
-                self.tx_app.clone(),
             )),
             _ => return Err(Error::SessionUnknown(session_type.to_string())),
         };
 
+        // call open on the session, to allow the setup of channels with the app
+        let res = session.open(self.listener.clone()).await;
+
+        // in case of error, return it
+        if let Err(e) = res {
+            return Err(e);
+        }
+
         // insert the session into the pool
         self.insert_session(id, session).await?;
 
-        Ok(id)
+        // return the session info
+        res
     }
 
     /// Remove a session from the pool
@@ -117,13 +124,13 @@ impl SessionLayer {
         pool.remove(&id).is_some()
     }
 
-    /// Handle a message and pass it to the corresponding session
+    /// Handle messages from the message processor
     pub(crate) async fn handle_message(
         &self,
         message: Message,
         direction: MessageDirection,
         session_id: Option<Id>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Message>, Error> {
         match direction {
             MessageDirection::North => self.handle_message_from_gateway(message, direction).await,
             MessageDirection::South => {
@@ -146,7 +153,7 @@ impl SessionLayer {
         mut message: Message,
         direction: MessageDirection,
         session_id: Id,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Message>, Error> {
         // check if pool contains the session
         if let Some(session) = self.pool.read().await.get(&session_id) {
             // Set session id and session type to message
@@ -172,7 +179,7 @@ impl SessionLayer {
         &self,
         message: Message,
         direction: MessageDirection,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Message>, Error> {
         let (id, session_type) = {
             // get the session type and the session id from the message
             let header = utils::get_session_header(&message);
@@ -205,7 +212,7 @@ impl SessionLayer {
             return ret;
         }
 
-        let new_session_id = match session_type {
+        let (info, stream) = match session_type {
             SessionHeaderType::Fnf => {
                 self.create_session(SessionType::FireAndForget, Some(id))
                     .await?
@@ -217,10 +224,17 @@ impl SessionLayer {
             }
         };
 
-        debug_assert!(new_session_id == id);
+        debug_assert!(info.id == id);
+
+        // As we are handling the message from the gateway, we need to call the
+        // open_channel method on the listener
+        self.listener
+            .open_channel(info, stream)
+            .await
+            .map_err(|e| Error::AppReception(e.to_string()))?;
 
         // retry the match
-        if let Some(session) = self.pool.read().await.get(&new_session_id) {
+        if let Some(session) = self.pool.write().await.get_mut(&id) {
             // pass the message
             return session.on_message(message, direction).await;
         }
@@ -233,16 +247,20 @@ impl SessionLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fire_and_forget::FireAndForget;
-    use crate::session::State;
 
+    use crate::fire_and_forget::FireAndForget;
+    use crate::session;
+    use crate::test_utils::TestListener;
     use agp_datapath::messages::encoder;
 
     fn create_session_layer() -> SessionLayer {
-        let (tx_gw, _) = tokio::sync::mpsc::channel(1);
-        let (tx_app, _) = tokio::sync::mpsc::channel(1);
+        // create listener
+        let listener = Arc::new(TestListener::new());
 
-        SessionLayer::new(0, tx_gw, tx_app)
+        // create fake channel to gateway
+        let (tx_gw, _) = tokio::sync::mpsc::channel(1);
+
+        SessionLayer::new(0, tx_gw, listener)
     }
 
     #[tokio::test]
@@ -254,16 +272,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_session() {
-        let (tx_gw, _) = tokio::sync::mpsc::channel(1);
-        let (tx_app, _) = tokio::sync::mpsc::channel(1);
-
-        let session_layer = SessionLayer::new(0, tx_gw.clone(), tx_app.clone());
+        let session_layer = create_session_layer();
 
         let session = Box::new(FireAndForget::new(
             1,
             SessionDirection::Bidirectional,
-            tx_gw.clone(),
-            tx_app.clone(),
+            session_layer.tx_gw(),
         ));
 
         let res = session_layer.insert_session(1, session).await;
@@ -272,16 +286,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_session() {
-        let (tx_gw, _) = tokio::sync::mpsc::channel(1);
-        let (tx_app, _) = tokio::sync::mpsc::channel(1);
-
-        let session_layer = SessionLayer::new(0, tx_gw.clone(), tx_app.clone());
+        let session_layer = create_session_layer();
 
         let session = Box::new(FireAndForget::new(
             1,
             SessionDirection::Bidirectional,
-            tx_gw.clone(),
-            tx_app.clone(),
+            session_layer.tx_gw(),
         ));
 
         session_layer.insert_session(1, session).await.unwrap();
@@ -292,10 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_session() {
-        let (tx_gw, _) = tokio::sync::mpsc::channel(1);
-        let (tx_app, _) = tokio::sync::mpsc::channel(1);
-
-        let session_layer = SessionLayer::new(0, tx_gw.clone(), tx_app.clone());
+        let session_layer = create_session_layer();
 
         let res = session_layer
             .create_session(SessionType::FireAndForget, None)
@@ -305,17 +312,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_message() {
+        // create listener
+        let listener = Arc::new(TestListener::new());
+
+        // create fake channel to gateway
         let (tx_gw, _) = tokio::sync::mpsc::channel(1);
-        let (tx_app, mut rx_app) = tokio::sync::mpsc::channel(1);
 
-        let session_layer = SessionLayer::new(0, tx_gw.clone(), tx_app.clone());
+        let session_layer = SessionLayer::new(0, tx_gw, listener.clone());
 
-        let session = Box::new(FireAndForget::new(
+        let mut session = Box::new(FireAndForget::new(
             1,
             SessionDirection::Bidirectional,
-            tx_gw.clone(),
-            tx_app.clone(),
+            session_layer.tx_gw(),
         ));
+
+        let (_info, mut stream) = session.open(listener.clone()).await.unwrap();
 
         session_layer.insert_session(1, session).await.unwrap();
 
@@ -341,10 +352,10 @@ mod tests {
         assert!(res.is_ok());
 
         // message should have been delivered to the app
-        let (msg, info) = rx_app.recv().await.unwrap();
+        let (msg, info) = stream.recv().await.expect("no message received");
         assert_eq!(msg, message);
         assert_eq!(info.id, 1);
         assert_eq!(info.session_type, SessionType::FireAndForget);
-        assert_eq!(info.state, State::Active);
+        assert_eq!(info.state, session::State::Active);
     }
 }

@@ -6,9 +6,11 @@ pub mod producer_buffer;
 pub mod receiver_buffer;
 pub mod session;
 pub mod timer;
+pub mod traits;
 
 mod fire_and_forget;
 mod session_layer;
+mod test_utils;
 
 use agp_datapath::messages::utils;
 use agp_datapath::messages::{Agent, AgentType};
@@ -19,6 +21,7 @@ use session_layer::SessionLayer;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
 use tracing::{debug, error, info};
@@ -32,6 +35,7 @@ use agp_datapath::message_processing::MessageProcessor;
 use agp_datapath::pubsub::proto::pubsub::v1::pub_sub_service_server::PubSubServiceServer;
 use agp_datapath::pubsub::proto::pubsub::v1::Message;
 pub use errors::ServiceError;
+use session::Info;
 
 // Define the kind of the component as static string
 pub const KIND: &str = "gateway";
@@ -182,7 +186,8 @@ impl Service {
     pub fn create_agent(
         &mut self,
         agent_name: &Agent,
-    ) -> Result<mpsc::Receiver<(Message, session::Info)>, ServiceError> {
+        listener: Arc<dyn traits::Listener>,
+    ) -> Result<(), ServiceError> {
         // make sure the agent is not already registered
         if self.session_layers.contains_key(agent_name) {
             error!("agent {:?} already exists", agent_name);
@@ -194,22 +199,15 @@ impl Service {
         // Channels to communicate with the gateway
         let (conn_id, tx_gw, rx_gw) = self.message_processor.register_local_connection();
 
-        // Channels to communicate with the local app
-        // TODO(msardara): make the buffer size configurable
-        let (tx_app, rx_app) = mpsc::channel(128);
-
         // create session layer
-        let session_layer = Arc::new(SessionLayer::new(conn_id, tx_gw, tx_app));
+        let session_layer = Arc::new(SessionLayer::new(conn_id, tx_gw, listener));
 
         // register agent within session layers
         self.session_layers
             .insert(agent_name.clone(), session_layer.clone());
 
         // start message processing using the rx channel
-        self.process_messages(agent_name.clone(), session_layer, rx_gw);
-
-        // return the rx channel
-        Ok(rx_app)
+        Ok(self.process_messages(agent_name.clone(), session_layer, rx_gw))
     }
 
     pub fn delete_agent(&mut self, agent_name: &Agent) -> Result<(), ServiceError> {
@@ -350,7 +348,7 @@ impl Service {
         agent: &Agent,
         session_id: Option<session::Id>,
         msg: Message,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<Option<Message>, ServiceError> {
         let session = match self.session_layers.get(agent) {
             None => {
                 error!("agent {} not found", agent);
@@ -367,10 +365,15 @@ impl Service {
                     error!("error sending the message to session {}: {}", id, e);
                     ServiceError::SessionSendError(e.to_string())
                 }),
-            None => session.tx_gw().send(Ok(msg)).await.map_err(|e| {
-                error!("error sending the subscription {}", e);
-                ServiceError::SubscriptionError(e.to_string())
-            }),
+            None => session
+                .tx_gw()
+                .send(Ok(msg))
+                .await
+                .map(|_| None)
+                .map_err(|e| {
+                    error!("error sending the subscription {}", e);
+                    ServiceError::SubscriptionError(e.to_string())
+                }),
         }
     }
 
@@ -384,7 +387,7 @@ impl Service {
         debug!("subscribe to {}/{:?}", agent_type, agent_id);
 
         let msg = utils::create_subscription(local_agent, agent_type, agent_id, None, conn);
-        self.send_message(local_agent, None, msg).await
+        self.send_message(local_agent, None, msg).await.map(|_| ())
     }
 
     pub async fn unsubscribe(
@@ -397,7 +400,7 @@ impl Service {
         debug!("unsubscribe from {}/{:?}", agent_type, agent_id);
 
         let msg = utils::create_unsubscription(local_agent, agent_type, agent_id, None, conn);
-        self.send_message(local_agent, None, msg).await
+        self.send_message(local_agent, None, msg).await.map(|_| ())
     }
 
     pub async fn set_route(
@@ -411,7 +414,7 @@ impl Service {
 
         // send a message with subscription from
         let msg = utils::create_subscription(local_agent, agent_type, agent_id, Some(conn), None);
-        self.send_message(local_agent, None, msg).await
+        self.send_message(local_agent, None, msg).await.map(|_| ())
     }
 
     pub async fn remove_route(
@@ -425,7 +428,7 @@ impl Service {
 
         //  send a message with unsubscription from
         let msg = utils::create_unsubscription(local_agent, agent_type, agent_id, Some(conn), None);
-        self.send_message(local_agent, None, msg).await
+        self.send_message(local_agent, None, msg).await.map(|_| ())
     }
 
     pub async fn publish(
@@ -436,7 +439,7 @@ impl Service {
         agent_id: Option<u64>,
         fanout: u32,
         blob: Vec<u8>,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<Option<Message>, ServiceError> {
         self.publish_to(source, session_id, agent_type, agent_id, fanout, blob, None)
             .await
     }
@@ -451,7 +454,7 @@ impl Service {
         fanout: u32,
         blob: Vec<u8>,
         out_conn: Option<u64>,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<Option<Message>, ServiceError> {
         debug!("sending publication to {}/{:?}", agent_type, agent_id);
 
         let msg = utils::create_publication(
@@ -541,7 +544,7 @@ impl Service {
         &self,
         agent: &Agent,
         session_type: session::SessionType,
-    ) -> Result<session::Id, ServiceError> {
+    ) -> Result<(Info, Receiver<(Message, Info)>), ServiceError> {
         // check if agent was registered
         let layer = self.session_layers.get(agent);
 
@@ -653,6 +656,7 @@ mod tests {
     use crate::session::SessionType;
 
     use super::*;
+    use crate::test_utils::TestListener;
     use agp_config::grpc::server::ServerConfig;
     use agp_config::tls::server::TlsServerConfig;
     use agp_datapath::messages::encoder;
@@ -715,15 +719,20 @@ mod tests {
             .build_server(ID::new_with_name(Kind::new(KIND).unwrap(), "test").unwrap())
             .unwrap();
 
+        // create a common application listener
+        let listener = Arc::new(TestListener::new());
+
         // create a subscriber
         let subscriber_agent = encoder::encode_agent("cisco", "default", "subscriber_agent", 0);
-        let mut sub_rx = service
-            .create_agent(&subscriber_agent)
+        service
+            .create_agent(&subscriber_agent, listener.clone())
             .expect("failed to create agent");
 
         // create a publisher
         let publisher_agent = encoder::encode_agent("cisco", "default", "publisher_agent", 0);
-        let _pub_rx = service.create_agent(&publisher_agent);
+        service
+            .create_agent(&publisher_agent, listener.clone())
+            .expect("failed to create agent");
 
         // sleep to allow the subscription to be processed
         time::sleep(Duration::from_millis(100)).await;
@@ -733,7 +742,7 @@ mod tests {
         // subscription is done automatically.
 
         // create a fire and forget session
-        let session_id = service
+        let (session_info, mut _stream) = service
             .create_session(&publisher_agent, SessionType::FireAndForget)
             .await
             .unwrap();
@@ -743,7 +752,7 @@ mod tests {
         service
             .publish(
                 &publisher_agent,
-                session_id,
+                session_info.id,
                 &subscriber_agent.agent_type(),
                 Some(*subscriber_agent.agent_id()),
                 1,
@@ -752,8 +761,11 @@ mod tests {
             .await
             .unwrap();
 
+        // sleep to allow the message to be processed
+        time::sleep(Duration::from_millis(100)).await;
+
         // wait for the message to arrive
-        let (msg, info) = sub_rx.recv().await.unwrap();
+        let (msg, info) = listener.get_message().await;
 
         // make sure message is a publication
         assert!(msg.message_type.is_some());
@@ -766,15 +778,15 @@ mod tests {
         assert_eq!(utils::get_payload(&publ), message_blob);
 
         // make also sure the session ids correspond
-        assert_eq!(session_id, info.id);
+        assert_eq!(session_info.id, info.id);
 
         // Now remove the session from the 2 agents
         service
-            .delete_session(&publisher_agent, session_id)
+            .delete_session(&publisher_agent, session_info.id)
             .await
             .unwrap();
         service
-            .delete_session(&subscriber_agent, session_id)
+            .delete_session(&subscriber_agent, session_info.id)
             .await
             .unwrap();
 

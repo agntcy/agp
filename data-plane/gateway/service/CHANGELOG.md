@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/agntcy/agp/compare/agp-service-v0.3.0...agp-service-v0.3.1) - 2025-04-11
+
+### Added
+
+- *(session layer)* send rtx error if the packet is not in the producer buffer ([#166](https://github.com/agntcy/agp/pull/166))
+
+### Other
+
+- upgrade to rust edition 2024 and toolchain 1.86.0 ([#164](https://github.com/agntcy/agp/pull/164))
+
 ## [0.3.0](https://github.com/agntcy/agp/compare/agp-service-v0.2.1...agp-service-v0.3.0) - 2025-04-08
 
 ### Added

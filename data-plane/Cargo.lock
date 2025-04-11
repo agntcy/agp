@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "agp-config"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "agp-tracing",
  "duration-str",
@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "agp-datapath"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "agp-config",
  "agp-tracing",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "agp-gw"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "agp-config",
  "agp-service",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "agp-service"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agp-config",
  "agp-datapath",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "agp-signal"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "tokio",
  "tracing",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "agp-tracing"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "once_cell",
  "opentelemetry",

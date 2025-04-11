@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/agntcy/agp/compare/agp-config-v0.1.6...agp-config-v0.1.7) - 2025-04-11
+
+### Other
+
+- upgrade to rust edition 2024 and toolchain 1.86.0 ([#164](https://github.com/agntcy/agp/pull/164))
+
 ## [0.1.6](https://github.com/agntcy/agp/compare/agp-config-v0.1.5...agp-config-v0.1.6) - 2025-04-08
 
 ### Other

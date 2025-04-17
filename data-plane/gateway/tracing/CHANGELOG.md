@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/agntcy/agp/compare/agp-tracing-v0.1.4...agp-tracing-v0.1.5) - 2025-04-17
+
+### Other
+
+- upgrade to rust edition 2024 and toolchain 1.86.0 ([#164](https://github.com/agntcy/agp/pull/164))
+
 ## [0.1.4](https://github.com/agntcy/agp/compare/agp-tracing-v0.1.3...agp-tracing-v0.1.4) - 2025-04-08
 
 ### Other

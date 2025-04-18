@@ -3,11 +3,13 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use bincode::{Decode, Encode};
+
 use crate::pubsub::ProtoAgent;
 
 pub const DEFAULT_AGENT_ID: u64 = u64::MAX;
 
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Default)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Default, Encode, Decode)]
 pub struct AgentType {
     organization: u64,
     namespace: u64,
@@ -80,7 +82,7 @@ impl AgentType {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Default)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Default, Encode, Decode)]
 pub struct Agent {
     agent_type: AgentType,
     agent_id: u64,

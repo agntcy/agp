@@ -50,6 +50,10 @@ enum SessionHeaderType {
   RTX_REPLY = 7;
   BEACON_STREAM = 8;
   BEACON_PUB_SUB = 9;
+  JOIN_REQUEST = 10;
+  JOIN_REPLY = 11;
+  LEAVE_REQUEST = 12;
+  LEAVE_REPLY = 13;
 }
 // Session.session_id is the ID of the session
 
@@ -63,6 +67,10 @@ enum SessionHeaderType {
 // RTX_REPLY = ID of the retransmitted packet
 // BEACON_STREAM = ID of the last message sent by the producer
 // BEACON_PUB_SUB = ID of the last message sent by the producer
+// JOIN_REQUEST = nonce
+// JOIN_REPLY = nonce of the associated JOIN_REQUEST
+// LEAVE_REQUEST = nonce
+// LEAVE_REPLY = nonce of the associated LEAVE_REQUEST
 
 message SessionHeader {
   SessionHeaderType header_type = 1;

@@ -9,6 +9,7 @@ description = "Main service and public API to interact with AGP data plane."
 agp-config = { path = "../config", version = "0.1.6" }
 agp-datapath = { path = "../datapath", version = "0.5.0" }
 async-trait = "0.1.88"
+bincode = "2.0.1"
 drain = { version = "0.1", features = ["retain"] }
 parking_lot = "0.12.3"
 rand = "0.9.0"

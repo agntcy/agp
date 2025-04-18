@@ -9,6 +9,8 @@ pub mod session;
 pub mod streaming;
 pub mod timer;
 
+pub mod topic_handler;
+
 mod fire_and_forget;
 mod request_response;
 mod session_layer;

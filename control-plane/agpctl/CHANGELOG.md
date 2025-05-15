@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/agntcy/agp/compare/agpctl-v0.1.4...agpctl-v0.1.5) (2025-05-15)
+
+
+### Features
+
+* add configuration file for agpctl ([#241](https://github.com/agntcy/agp/issues/241)) ([236a435](https://github.com/agntcy/agp/commit/236a4352d3212a2b61ca8aacf60ba754b930d41a))
+
 ## [0.1.4](https://github.com/agntcy/agp/compare/agpctl-v0.1.3...agpctl-v0.1.4) (2025-05-07)
 
 

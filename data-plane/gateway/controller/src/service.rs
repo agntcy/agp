@@ -14,7 +14,8 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
 
 use crate::api::proto::api::v1::{
-    Ack, ControlMessage, controller_service_client::ControllerServiceClient,
+    Ack, ControlMessage, SubscriptionEntry, SubscriptionListRequest,
+    controller_service_client::ControllerServiceClient,
     controller_service_server::ControllerService as GrpcControllerService,
 };
 use crate::errors::ControllerError;
@@ -24,6 +25,7 @@ use agp_datapath::message_processing::MessageProcessor;
 use agp_datapath::messages::utils::AgpHeaderFlags;
 use agp_datapath::messages::{Agent, AgentType};
 use agp_datapath::pubsub::proto::pubsub::v1::Message as PubsubMessage;
+use agp_datapath::tables::SubscriptionTable;
 
 #[derive(Debug, Clone)]
 pub struct ControllerService {
@@ -46,7 +48,7 @@ impl ControllerService {
         }
     }
 
-    async fn handle_new_message(
+    async fn handle_new_control_message(
         &self,
         msg: ControlMessage,
         tx: mpsc::Sender<Result<ControlMessage, Status>>,
@@ -132,7 +134,7 @@ impl ControllerService {
                                 Some(AgpHeaderFlags::default().with_recv_from(conn)),
                             );
 
-                            if let Err(e) = self.send_message(msg).await {
+                            if let Err(e) = self.send_control_message(msg).await {
                                 error!("failed to subscribe: {}", e);
                             }
                         }
@@ -168,7 +170,7 @@ impl ControllerService {
                                 Some(AgpHeaderFlags::default().with_recv_from(conn)),
                             );
 
-                            if let Err(e) = self.send_message(msg).await {
+                            if let Err(e) = self.send_control_message(msg).await {
                                 error!("failed to unsubscribe: {}", e);
                             }
                         }
@@ -206,7 +208,7 @@ impl ControllerService {
         Ok(())
     }
 
-    async fn send_message(&self, msg: PubsubMessage) -> Result<(), ControllerError> {
+    async fn send_control_message(&self, msg: PubsubMessage) -> Result<(), ControllerError> {
         let sender = self.tx_gw.get_or_init(|| {
             let (_, tx_gw, _) = self.message_processor.register_local_connection();
             tx_gw
@@ -218,7 +220,7 @@ impl ControllerService {
         })
     }
 
-    async fn process_stream(
+    async fn process_control_message_stream(
         &self,
         cancellation_token: CancellationToken,
         mut stream: impl Stream<Item = Result<ControlMessage, Status>> + Unpin + Send + 'static,
@@ -233,7 +235,7 @@ impl ControllerService {
                     next = stream.next() => {
                         match next {
                             Some(Ok(msg)) => {
-                                if let Err(e) = svc.handle_new_message(msg, tx.clone()).await {
+                                if let Err(e) = svc.handle_new_control_message(msg, tx.clone()).await {
                                     error!("error processing incoming control message: {:?}", e);
                                 }
                             }
@@ -244,6 +246,73 @@ impl ControllerService {
                                     }
                                 } else {
                                     error!("error receiving control messages: {:?}", e);
+                                }
+                                break;
+                            }
+                            None => {
+                                debug!("end of stream");
+                                break;
+                            }
+                        }
+                    }
+                    _ = token.cancelled() => {
+                        debug!("shutting down stream on cancellation token");
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
+    async fn handle_new_subscription_list_request(
+        &self,
+        _: SubscriptionListRequest,
+        tx: mpsc::Sender<Result<SubscriptionEntry, Status>>,
+    ) -> Result<(), ControllerError> {
+        self.message_processor.subscription_table().for_each(
+            |agent_type, agent_id, local, remote| {
+                let entry = SubscriptionEntry {
+                    company: agent_type.organization().to_string(),
+                    namespace: agent_type.namespace().to_string(),
+                    agent_name: agent_type.agent_type().to_string(),
+                    agent_id: Some(agent_id),
+                    local_connection_ids: local.to_vec(),
+                    remote_connection_ids: remote.to_vec(),
+                };
+
+                let _ = tx.try_send(Ok(entry));
+            },
+        );
+
+        Ok(())
+    }
+
+    async fn process_list_subscription_stream(
+        &self,
+        cancellation_token: CancellationToken,
+        mut stream: impl Stream<Item = Result<SubscriptionListRequest, Status>> + Unpin + Send + 'static,
+        tx: mpsc::Sender<Result<SubscriptionEntry, Status>>,
+    ) -> tokio::task::JoinHandle<()> {
+        let svc = self.clone();
+        let token = cancellation_token.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    next = stream.next() => {
+                        match next {
+                            Some(Ok(msg)) => {
+                                if let Err(e) = svc.handle_new_subscription_list_request(msg, tx.clone()).await {
+                                    error!("error processing incoming subscription list request: {:?}", e);
+                                }
+                            }
+                            Some(Err(e)) => {
+                                if let Some(io_err) = ControllerService::match_for_io_error(&e) {
+                                    if io_err.kind() == std::io::ErrorKind::BrokenPipe {
+                                        info!("connection closed by peer");
+                                    }
+                                } else {
+                                    error!("error receiving subscription list request: {:?}", e);
                                 }
                                 break;
                             }
@@ -284,7 +353,11 @@ impl ControllerService {
             match client.open_control_channel(Request::new(out_stream)).await {
                 Ok(stream) => {
                     let ret = self
-                        .process_stream(CancellationToken::new(), stream.into_inner(), tx)
+                        .process_control_message_stream(
+                            CancellationToken::new(),
+                            stream.into_inner(),
+                            tx,
+                        )
                         .await;
                     return Ok(ret);
                 }
@@ -331,6 +404,9 @@ impl GrpcControllerService for ControllerService {
     type OpenControlChannelStream =
         Pin<Box<dyn Stream<Item = Result<ControlMessage, Status>> + Send + 'static>>;
 
+    type ListSubscriptionsStream =
+        Pin<Box<dyn Stream<Item = Result<SubscriptionEntry, Status>> + Send + 'static>>;
+
     async fn open_control_channel(
         &self,
         request: Request<tonic::Streaming<ControlMessage>>,
@@ -338,12 +414,28 @@ impl GrpcControllerService for ControllerService {
         let stream = request.into_inner();
         let (tx, rx) = mpsc::channel::<Result<ControlMessage, Status>>(128);
 
-        self.process_stream(CancellationToken::new(), stream, tx.clone())
+        self.process_control_message_stream(CancellationToken::new(), stream, tx.clone())
             .await;
 
         let out_stream = ReceiverStream::new(rx);
         Ok(Response::new(
             Box::pin(out_stream) as Self::OpenControlChannelStream
+        ))
+    }
+
+    async fn list_subscriptions(
+        &self,
+        request: Request<tonic::Streaming<SubscriptionListRequest>>,
+    ) -> Result<Response<Self::ListSubscriptionsStream>, Status> {
+        let stream = request.into_inner();
+        let (tx, rx) = mpsc::channel::<Result<SubscriptionEntry, Status>>(128);
+
+        self.process_list_subscription_stream(CancellationToken::new(), stream, tx.clone())
+            .await;
+
+        let out_stream = ReceiverStream::new(rx);
+        Ok(Response::new(
+            Box::pin(out_stream) as Self::ListSubscriptionsStream
         ))
     }
 }

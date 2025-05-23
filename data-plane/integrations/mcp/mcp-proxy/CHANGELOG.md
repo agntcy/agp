@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/agntcy/agp/compare/agp-mcp-proxy-v0.1.4...agp-mcp-proxy-v0.1.5) - 2025-05-23
+
+### Added
+
+- add optional acks for FNF messages ([#264](https://github.com/agntcy/agp/pull/264))
+
 ## [0.1.4](https://github.com/agntcy/agp/compare/agp-mcp-proxy-v0.1.3...agp-mcp-proxy-v0.1.4) - 2025-05-15
 
 ### Fixed

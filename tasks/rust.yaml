@@ -30,14 +30,14 @@ vars:
   CLANG:
     sh: "[[ {{.OSTYPE}} == darwin* ]] && xcrun --sdk macosx --find clang || echo 'clang-{{.LLVM_VERSION}}'"
   STRIP:
-    sh: "[[ {{.OSTYPE}} == darwin* ]] && xcrun --sdk macosx --find strip || echo 'llvm-strip-{{.LLVM_VERSION}}'"
+    sh: echo "$(rustup show home)/toolchains/$(rustup show active-toolchain | cut -d' ' -f1)/lib/rustlib/{{.TARGET}}/bin/llvm-strip"
   AR:
-    sh: "[[ {{.OSTYPE}} == darwin* ]] && xcrun --sdk macosx --find ar || echo 'llvm-ar-{{.LLVM_VERSION}}'"
+    sh: echo "$(rustup show home)/toolchains/$(rustup show active-toolchain | cut -d' ' -f1)/lib/rustlib/{{.TARGET}}/bin/llvm-ar"
   OBJCOPY:
-    sh: "echo 'llvm-objcopy-{{.LLVM_VERSION}}'"
+    sh: echo "$(rustup show home)/toolchains/$(rustup show active-toolchain | cut -d' ' -f1)/lib/rustlib/{{.TARGET}}/bin/llvm-objcopy"
   RUSTFLAGS_SELF_CONTAINED: "-Clink-self-contained=yes -Clinker=rust-lld -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--no-rosegment"
   LINKER:
-    sh: '[[ "$(uname -m)" == "{{.TARGET_ARCH}}" ]] && echo "/usr/bin/ld" || echo "/usr/{{.TARGET_ARCH}}-linux-gnu/bin/ld"'
+    sh: echo "$(rustup show home)/toolchains/$(rustup show active-toolchain | cut -d' ' -f1)/lib/rustlib/{{.TARGET}}/bin/gcc-ld/ld.lld"
 
 env:
   # linux/arm64 + gnu
@@ -223,6 +223,7 @@ tasks:
     internal: true
     cmds:
       - rustup target add {{.TARGET}}
+      - rustup component add llvm-tools
 
   toolchain:build:install-cargo-components:
     desc: "Install the components"

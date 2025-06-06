@@ -111,7 +111,7 @@ tasks:
       - |
         uv run python ./examples/fire-and-forget.py \
           -l cisco/default/alice          \
-          -g http://localhost:12345       \
+          -s http://localhost:12345       \
           {{.EXTRA_ARGS}}
     vars:
       EXTRA_ARGS: '{{.EXTRA_ARGS | default ""}}'
@@ -124,7 +124,7 @@ tasks:
       - |
         uv run python ./examples/fire-and-forget.py \
           -l cisco/default/alice          \
-          -g http://localhost:12345       \
+          -s http://localhost:12345       \
           {{.EXTRA_ARGS}}
     vars:
       EXTRA_ARGS: '{{.EXTRA_ARGS | default ""}}'
@@ -138,7 +138,7 @@ tasks:
         uv run python ./examples/fire-and-forget.py   \
           -l cisco/default/bob              \
           -r cisco/default/alice            \
-          -g http://localhost:12345         \
+          -s http://localhost:12345         \
           -m "hello"         \
           -i 1000                           \
           {{.EXTRA_ARGS}}
@@ -154,7 +154,7 @@ tasks:
         uv run python ./examples/request-reply.py   \
           -l cisco/default/requester                \
           -r cisco/default/responder                \
-          -g http://localhost:12345                 \
+          -s http://localhost:12345                 \
           -m "hello"                                \
           {{.EXTRA_ARGS}}
     vars:
@@ -168,7 +168,7 @@ tasks:
       - |
         uv run python ./examples/request-reply.py   \
           -l cisco/default/responder                \
-          -g http://localhost:12345                 \
+          -s http://localhost:12345                 \
           {{.EXTRA_ARGS}}
     vars:
       EXTRA_ARGS: '{{.EXTRA_ARGS | default ""}}'
@@ -182,7 +182,7 @@ tasks:
         uv run python ./examples/streaming.py     \
           -l cisco/default/producer               \
           -r cisco/default/stream                 \
-          -g http://localhost:12345               \
+          -s http://localhost:12345               \
           -p                                      \
           {{.EXTRA_ARGS}}
     vars:
@@ -213,7 +213,7 @@ tasks:
         uv run python ./examples/pubsub.py         \
           -l cisco/default/participant-{{.CONSUMER_ID}}  \
           -r cisco/default/stream                     \
-          -g http://localhost:12345                   \
+          -s http://localhost:46357                   \
           {{.EXTRA_ARGS}}
     vars:
       EXTRA_ARGS: '{{.EXTRA_ARGS | default ""}}'

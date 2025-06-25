@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use slim_datapath::messages::{Agent, AgentType};
 use slim_service::SlimHeaderFlags;
 use testing::parse_line;
@@ -206,6 +206,72 @@ async fn main() {
     // wait for the connection to be established
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
+    // MLS setup, only if mls_group_id is provided
+    let mls_group_id = Some("MSL_GROUP");
+    let local_agent= "pusblisher";
+    let server_mls_option = if let Some(group_identifier) = mls_group_id {
+        info!("MLS enabled with group identifier: {}", group_identifier);
+
+        //TODO(zkacsand): temporary file based key package exchange, until the session API is ready to support it
+        // Clean up previous run files
+        let key_package_path = format!("/tmp/mls_key_package_{}", group_identifier);
+        let welcome_path = format!("/tmp/mls_welcome_{}", group_identifier);
+        let _ = std::fs::remove_file(&key_package_path);
+        let _ = std::fs::remove_file(&welcome_path);
+
+        // Clean up MLS identity directories
+        let identity_path = format!("/tmp/mls_identities_{}", local_agent);
+        let _ = std::fs::remove_dir_all(&identity_path);
+
+        if false {
+            // Client: will join group after server creates it
+            None
+        } else {
+            // Server: create group and wait for client key package
+            let identity_provider = Arc::new(
+                slim_mls::identity::FileBasedIdentityProvider::new(&identity_path).unwrap(),
+            );
+            let mut server_mls =
+                slim_mls::mls::Mls::new(local_agent.to_string(), identity_provider);
+            server_mls.initialize().await.unwrap();
+
+            // Create group
+            let group_id = server_mls.create_group().unwrap();
+            info!("Server created MLS group");
+
+            // Wait for client key package
+            info!(
+                "Server waiting for client key package at: {}",
+                key_package_path
+            );
+            let mut attempts = 0;
+            let key_package = loop {
+                if std::path::Path::new(&key_package_path).exists() {
+                    let key_package_bytes = std::fs::read(&key_package_path).unwrap();
+                    info!("Server found client key package");
+                    break key_package_bytes;
+                }
+                if attempts > 100 {
+                    panic!("Timeout waiting for client key package");
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                attempts += 1;
+            };
+
+            // Add client to group and generate welcome message
+            let welcome_message = server_mls.add_member(&group_id, &key_package).unwrap();
+
+            // Save welcome message for client
+            std::fs::write(&welcome_path, &welcome_message).unwrap();
+            info!("Server saved welcome message to: {}", welcome_path);
+
+            Some((server_mls, group_id))
+        }
+    } else {
+        info!("MLS disabled - no group identifier provided");
+        None
+    };
+
     // STREAMING/PUBSUB MODE
     if streaming || pubsub {
         // set route for the topic
@@ -263,6 +329,26 @@ async fn main() {
             panic!("error creating fire and forget session");
         }
 
+        let session_info  = match res {
+            Ok(i) => i,
+            Err(_) => {
+                panic!{"panic"};
+            }
+        };
+
+        let mut server_mls_for_session = server_mls_option;
+        if server_mls_for_session.is_some() {
+            let (mls, group_id) = server_mls_for_session.take().unwrap();
+            let interceptor = slim_mls::interceptor::MlsInterceptor::new(
+                Arc::new(Mutex::new(mls)),
+                group_id,
+            );
+            svc.add_session_interceptor(&agent_name, session_info.id, Box::new(interceptor))
+                .await
+                .unwrap();
+            info!("Server setup MLS for session");
+        }
+
         // receive packets from slim
         tokio::spawn(async move {
             loop {
@@ -295,10 +381,12 @@ async fn main() {
         });
 
         // get the session
-        let session_info = res.unwrap();
+        //let session_info = res.unwrap();
 
         for i in 0..max_packets.unwrap_or(u64::MAX) {
-            let payload: Vec<u8> = vec![120; msg_size as usize]; // ASCII for 'x' = 120
+            //let payload: Vec<u8> = vec![120; msg_size as usize]; // ASCII for 'x' = 120
+            let payload_str = String::from("this is the original message");
+            let payload = payload_str.as_bytes().to_vec();
             info!("publishing message {}", i);
             // set fanout > 1 to send the message in broadcast
             let flags = SlimHeaderFlags::new(10, None, None, None, None);

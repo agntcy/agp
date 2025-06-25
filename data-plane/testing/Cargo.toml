@@ -21,6 +21,7 @@ path = "src/bin/publisher.rs"
 agntcy-slim = { workspace = true }
 agntcy-slim-config = { workspace = true }
 agntcy-slim-datapath = { workspace = true }
+agntcy-slim-mls = { workspace = true }
 agntcy-slim-service = { workspace = true }
 clap = { workspace = true }
 indicatif = { workspace = true }

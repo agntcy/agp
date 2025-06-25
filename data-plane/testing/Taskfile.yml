@@ -39,10 +39,27 @@ tasks:
           sleep 1
         done
 
+  run:consumer-mls:
+    desc: "Run subscriber applications"
+    cmds:
+      - |
+        cargo run --release --bin subscriber -- -c $CONFIG_CLIENT -i 0 --streaming
+
+  run:attacker:
+    desc: "Run subscriber applications"
+    cmds:
+      - |
+        cargo run --release --bin subscriber -- -c $CONFIG_CLIENT -i 1000 --streaming
+
   run:publisher:
     desc: "Run publisher application"
     cmds:
       - cargo run --release --bin publisher -- -w sub${SUB}_pub${PUB}_i${SUB_AGENTS}_s${SUB_AGENTS}.dat -c $CONFIG_CLIENT -i 0
+
+  run:producer-mls:
+    desc: "Run publisher application"
+    cmds:
+      - cargo run --release --bin publisher -- -c $CONFIG_CLIENT -i 0 -s -f 250
 
   run:shutdown:
     desc: "Shutdown test"

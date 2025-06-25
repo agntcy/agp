@@ -1,9 +1,10 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
+use parking_lot::Mutex;
 use slim_datapath::messages::Agent;
 use slim_service::streaming::StreamingConfiguration;
-use std::fs::File;
+use std::{fs::File, sync::Arc};
 use std::io::prelude::*;
 use std::time::Duration;
 use testing::parse_line;
@@ -120,18 +121,98 @@ async fn main() {
             }
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let mut set_interceptor = false;
+        let mut to_set_interceptor = false;
+        let mut group_id = vec![];
+        let local_agent = "subscriber";
+        let group_identifier = "MSL_GROUP";
+         let identity_path = format!("/tmp/mls_identities_{}", local_agent);
+                                  // Client: generate key package and wait for welcome message
+                            let identity_provider = Arc::new(
+                                slim_mls::identity::FileBasedIdentityProvider::new(&identity_path).unwrap(),
+                            );
+                            
+        let mut client_mls =
+                                slim_mls::mls::Mls::new(local_agent.to_string(), identity_provider); 
+        if id == 0 {
+            to_set_interceptor = true;
+                        println!("setup MLS");
+                        // Clean up MLS identity directories
+                            
+                           
 
+  
+                            client_mls.initialize().await.unwrap();
+
+                            // Generate and save key package for server to use
+                            let key_package = client_mls.generate_key_package().unwrap();
+                            let key_package_path = format!("/tmp/mls_key_package_{}", group_identifier);
+                            std::fs::write(&key_package_path, &key_package).unwrap();
+                            info!("Client saved key package to: {}", key_package_path);
+
+                            // Wait for welcome message from server
+                            let welcome_path = format!("/tmp/mls_welcome_{}", group_identifier);
+                            info!("Client waiting for welcome message at: {}", welcome_path);
+                            let mut attempts = 0;
+                            let welcome_message = loop {
+                                if std::path::Path::new(&welcome_path).exists() {
+                                    let welcome_bytes = std::fs::read(&welcome_path).unwrap();
+                                    info!("Client found welcome message");
+                                    break welcome_bytes;
+                                }
+                                if attempts > 100 {
+                                    panic!("Timeout waiting for welcome message");
+                                }
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                attempts += 1;
+                            };
+
+                            // Join the group
+                            group_id = client_mls.join_group(&welcome_message).unwrap();
+                            info!("Client successfully joined group");
+
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let interceptor = slim_mls::interceptor::MlsInterceptor::new(
+                                Arc::new(Mutex::new(client_mls)),
+                                group_id,
+                            );
         info!("waiting for incoming messages");
         loop {
             match rx.recv().await {
                 Some(res) => match res {
                     Ok(recv_msg) => {
-                        info!(
-                            "received message {} from session {}",
-                            recv_msg.info.message_id.unwrap(),
-                            recv_msg.info.id
-                        );
+                        if to_set_interceptor && !set_interceptor {
+                            set_interceptor = true;
+
+
+                            // enable mls for the session with group_id
+                            //let interceptor = slim_mls::interceptor::MlsInterceptor::new(
+                            //    Arc::new(Mutex::new(client_mls)),
+                            //    group_id,
+                            //);
+                            svc.add_session_interceptor(&agent_name, recv_msg.info.id, Box::new(interceptor.clone()))
+                                .await
+                                .unwrap();
+            
+                        }
+                        let payload = recv_msg.message.get_payload().unwrap().blob.clone();
+                        match str::from_utf8(&payload) {
+                            Ok(p) => {
+                                info!(
+                                "received message {}: {}", recv_msg.info.message_id.unwrap(), p);
+                            }
+                            Err(e) => {
+                                info!("error parsing the payalod: {}", e);
+                            }
+                        }
+
+                        //info!(
+                        //    "received message: {} from session {}",
+                        //    recv_msg.info.message_id.unwrap(),
+                        //    recv_msg.info.id
+                        //);
                     }
                     Err(e) => {
                         error!("received error {}", e)

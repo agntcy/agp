@@ -3821,6 +3821,7 @@ dependencies = [
  "agntcy-slim",
  "agntcy-slim-config",
  "agntcy-slim-datapath",
+ "agntcy-slim-mls",
  "agntcy-slim-service",
  "clap",
  "indicatif",

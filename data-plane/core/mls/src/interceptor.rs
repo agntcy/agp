@@ -13,6 +13,8 @@ use tracing::{debug, error, warn};
 const METADATA_MLS_ENCRYPTED: &str = "MLS_ENCRYPTED";
 const METADATA_MLS_GROUP_ID: &str = "MLS_GROUP_ID";
 
+
+#[derive(Clone)]
 pub struct MlsInterceptor {
     mls: Arc<Mutex<Mls>>,
     group_id: Vec<u8>,

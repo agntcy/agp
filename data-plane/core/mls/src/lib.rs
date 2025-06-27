@@ -3,5 +3,8 @@
 
 pub mod errors;
 pub mod identity;
+pub mod identity_provider;
 pub mod interceptor;
 pub mod mls;
+
+pub use identity::Identity;
